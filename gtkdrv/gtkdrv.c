@@ -9,7 +9,11 @@
 #include "gtkdrv.h"
 
 #if USE_GTK
+
+#ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE /* needed for usleep() */
+#endif
+
 #include <stdlib.h>
 #include <unistd.h>
 #include <gtk/gtk.h>
