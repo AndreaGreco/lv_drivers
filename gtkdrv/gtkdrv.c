@@ -33,7 +33,7 @@
 /**********************
  *  STATIC PROTOTYPES
  **********************/
-static void gtkdrv_handler(void * p);
+static void* gtkdrv_handler(void * p);
 static gboolean mouse_pressed(GtkWidget *widget, GdkEventButton *event,
     gpointer user_data);
 static gboolean mouse_released(GtkWidget *widget, GdkEventButton *event,
@@ -196,7 +196,7 @@ void gtkdrv_keyboard_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data)
  *   STATIC FUNCTIONS
  **********************/
 
-static void gtkdrv_handler(void * p)
+static void* gtkdrv_handler(void * p)
 {
     while(1) {
         gtk_image_set_from_pixbuf(GTK_IMAGE(output_image), pixbuf); // Test code
