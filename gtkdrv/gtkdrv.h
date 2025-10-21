@@ -41,11 +41,17 @@ extern "C" {
 /**********************
  * GLOBAL PROTOTYPES
  **********************/
+
+typedef void gtkdrv_close_handler_t(void);
+
 void gtkdrv_init(void);
 uint32_t gtkdrv_tick_get(void);
 void gtkdrv_flush_cb(lv_disp_drv_t * disp_drv, const lv_area_t * area, lv_color_t * color_p);
 void gtkdrv_mouse_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data);
 void gtkdrv_keyboard_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data);
+void gtkdrv_close(void);
+void gtkdrv_set_close_handler(gtkdrv_close_handler_t * handler);
+
 /**********************
  *      MACROS
  **********************/
