@@ -7,7 +7,10 @@
  *      INCLUDES
  *********************/
 #include "gtkdrv.h"
+#include <bits/endian.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #if USE_GTK
 
@@ -29,10 +32,15 @@
 /*********************
  *      DEFINES
  *********************/
+#define KEY_QUEUE_SIZE 32
 
 /**********************
  *      TYPEDEFS
  **********************/
+typedef struct {
+    uint32_t key;
+    lv_indev_state_t state;
+} key_event_t;
 
 /**********************
  *  STATIC PROTOTYPES
@@ -67,10 +75,15 @@ static unsigned char gtk_is_closing = FALSE;
 static lv_coord_t mouse_x = 0;
 static lv_coord_t mouse_y = 0;
 static lv_indev_state_t mouse_btn = LV_INDEV_STATE_REL;
-static lv_key_t last_key = 0;
-static lv_indev_state_t last_key_state = LV_INDEV_STATE_REL;
+
 static pthread_t gtk_thread = 0;
 static pthread_mutex_t gtk_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Key event queue
+static key_event_t key_queue[KEY_QUEUE_SIZE];
+static volatile uint32_t key_queue_read = 0;
+static volatile uint32_t key_queue_write = 0;
+static pthread_mutex_t key_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static uint8_t fb[LV_HOR_RES_MAX * LV_VER_RES_MAX * 3];
 
@@ -148,7 +161,8 @@ void gtkdrv_init(void)
 
     gtk_widget_show_all(window);
 
-    pixbuf = gdk_pixbuf_new_from_data((guchar*)fb, GDK_COLORSPACE_RGB, false, 8, LV_HOR_RES_MAX, LV_VER_RES_MAX, LV_HOR_RES_MAX * 3, NULL, NULL);
+    pixbuf = gdk_pixbuf_new_from_data((guchar*)fb, GDK_COLORSPACE_RGB, false, 8, 
+                                      LV_HOR_RES_MAX, LV_VER_RES_MAX, LV_HOR_RES_MAX * 3, NULL, NULL);
     if (pixbuf == NULL)
     {
         fprintf(stderr, "Creating pixbuf failed\n");
@@ -235,12 +249,24 @@ void gtkdrv_mouse_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data)
 
 void gtkdrv_keyboard_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data)
 {
-    data->key = last_key;
-    data->state = last_key_state;
+    pthread_mutex_lock(&key_queue_mutex);
+
+    if(key_queue_read != key_queue_write) {
+        // There are events in the queue
+        data->key = key_queue[key_queue_read].key;
+        data->state = key_queue[key_queue_read].state;
+
+        key_queue_read = (key_queue_read + 1) % KEY_QUEUE_SIZE;
+        data->continue_reading = (key_queue_read != key_queue_write);
+    } else {
+        // Queue is empty
+        data->key = 0;
+        data->state = LV_INDEV_STATE_REL;
+        data->continue_reading = false;
+    }
+
+    pthread_mutex_unlock(&key_queue_mutex);
 }
-
-
-
 
 /**********************
  *   STATIC FUNCTIONS
@@ -311,50 +337,130 @@ static gboolean mouse_motion(GtkWidget *widget, GdkEventMotion *event,
     return FALSE;
 }
 
+static void enqueue_key_event(uint32_t key, lv_indev_state_t state)
+{
+    pthread_mutex_lock(&key_queue_mutex);
+
+    uint32_t next_write = (key_queue_write + 1) % KEY_QUEUE_SIZE;
+
+    // Check if queue is full
+    if(next_write != key_queue_read) {
+        key_queue[key_queue_write].key = key;
+        key_queue[key_queue_write].state = state;
+        key_queue_write = next_write;
+    } else {
+        fprintf(stderr, "Key queue overflow!\n");
+    }
+
+    pthread_mutex_unlock(&key_queue_mutex);
+}
 
 static gboolean keyboard_press(GtkWidget *widget, GdkEventKey *event,
     gpointer user_data)
 {
+    uint32_t utf8_char = 0;
 
-    uint32_t ascii_key = event->keyval;
-    /*Remap some key to LV_KEY_... to manage groups*/
     switch(event->keyval) {
         case GDK_KEY_rightarrow:
         case GDK_KEY_Right:
-            ascii_key =  LV_KEY_RIGHT;
+            utf8_char = LV_KEY_RIGHT;
             break;
-
         case GDK_KEY_leftarrow:
         case GDK_KEY_Left:
-            ascii_key =  LV_KEY_LEFT;
+            utf8_char = LV_KEY_LEFT;
             break;
-
         case GDK_KEY_uparrow:
         case GDK_KEY_Up:
-            ascii_key =  LV_KEY_UP;
+            utf8_char = LV_KEY_UP;
             break;
-
         case GDK_KEY_downarrow:
         case GDK_KEY_Down:
-            ascii_key =  LV_KEY_DOWN;
+            utf8_char = LV_KEY_DOWN;
             break;
-
         case GDK_KEY_Escape:
-            ascii_key =  LV_KEY_ESC;
+            utf8_char = LV_KEY_ESC;
             break;
-
         case GDK_KEY_BackSpace:
-            ascii_key =  LV_KEY_BACKSPACE;
+            utf8_char = LV_KEY_BACKSPACE;
+            break;
+        case GDK_KEY_Delete:
+            utf8_char = LV_KEY_DEL;
+            break;
+        case GDK_KEY_Tab:
+            utf8_char = LV_KEY_NEXT;
+            break;
+        case GDK_KEY_Home:
+            utf8_char = LV_KEY_HOME;
+            break;
+        case GDK_KEY_End:
+            utf8_char = LV_KEY_END;
+            break;
+        case GDK_KEY_KP_Enter:
+        case GDK_KEY_Return:
+        case '\r':
+            utf8_char = LV_KEY_ENTER;
             break;
 
+        case GDK_KEY_Alt_L:
+        case GDK_KEY_Alt_R:
+        case GDK_KEY_Shift_L:
+        case GDK_KEY_Shift_R:
+            return TRUE;
+
+        default:
+            // Get unicode character from string if available
+            if (event->string && *event->string) {
+                int string_length = strlen(event->string);
+                memcpy(&utf8_char, event->string, string_length);
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+                __builtin_bswap32(utf8_char);
+#endif
+            } else {
+                utf8_char = event->keyval; // fallback
+            }
+
+        break;
+    }
+    enqueue_key_event(utf8_char, LV_INDEV_STATE_PR);
+
+    return TRUE;
+}
+
+static gboolean keyboard_release(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
+{
+    uint32_t ascii_key = event->keyval;
+
+    // Same mapping as press
+    switch(event->keyval) {
+        case GDK_KEY_rightarrow:
+        case GDK_KEY_Right:
+            ascii_key = LV_KEY_RIGHT;
+            break;
+        case GDK_KEY_leftarrow:
+        case GDK_KEY_Left:
+            ascii_key = LV_KEY_LEFT;
+            break;
+        case GDK_KEY_uparrow:
+        case GDK_KEY_Up:
+            ascii_key = LV_KEY_UP;
+            break;
+        case GDK_KEY_downarrow:
+        case GDK_KEY_Down:
+            ascii_key = LV_KEY_DOWN;
+            break;
+        case GDK_KEY_Escape:
+            ascii_key = LV_KEY_ESC;
+            break;
+        case GDK_KEY_BackSpace:
+            ascii_key = LV_KEY_BACKSPACE;
+            break;
         case GDK_KEY_Delete:
             ascii_key = LV_KEY_DEL;
             break;
-
         case GDK_KEY_Tab:
             ascii_key = LV_KEY_NEXT;
             break;
-
         case GDK_KEY_KP_Enter:
         case GDK_KEY_Return:
         case '\r':
@@ -366,21 +472,9 @@ static gboolean keyboard_press(GtkWidget *widget, GdkEventKey *event,
 
     }
 
-     last_key = ascii_key;
-     last_key_state = LV_INDEV_STATE_PR;
-     // For other codes refer to https://developer.gnome.org/gdk3/stable/gdk3-Event-Structures.html#GdkEventKey
+    enqueue_key_event(ascii_key, LV_INDEV_STATE_REL);
 
-     return TRUE;
-}
-
-static gboolean keyboard_release(GtkWidget *widget, GdkEventKey *event,
-    gpointer user_data)
-{
-     last_key = 0;
-     last_key_state = LV_INDEV_STATE_REL;
-     // For other codes refer to https://developer.gnome.org/gdk3/stable/gdk3-Event-Structures.html#GdkEventKey
-
-     return TRUE;
+    return TRUE;
 }
 
 gtkdrv_close_handler_t *gtkdrv_close_handler = NULL;
