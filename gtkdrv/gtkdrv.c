@@ -405,6 +405,9 @@ static gboolean keyboard_press(GtkWidget *widget, GdkEventKey *event,
         case GDK_KEY_Alt_R:
         case GDK_KEY_Shift_L:
         case GDK_KEY_Shift_R:
+        case GDK_KEY_Caps_Lock:
+        case GDK_KEY_Control_L:
+        case GDK_KEY_Control_R:
             return TRUE;
 
         default:
