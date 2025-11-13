@@ -415,10 +415,6 @@ static gboolean keyboard_press(GtkWidget *widget, GdkEventKey *event,
             if (event->string && *event->string) {
                 int string_length = strlen(event->string);
                 memcpy(&utf8_char, event->string, string_length);
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-                __builtin_bswap32(utf8_char);
-#endif
             } else {
                 utf8_char = event->keyval; // fallback
             }
