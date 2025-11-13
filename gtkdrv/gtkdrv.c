@@ -58,7 +58,6 @@ static gboolean keyboard_release(GtkWidget *widget, GdkEventKey *event,
     gpointer user_data);
 
 static void quit_handler(void);
-static void gtkdrv_aggressive_cleanup(void);
 
 /**********************
  *  STATIC VARIABLES
